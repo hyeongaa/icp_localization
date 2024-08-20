@@ -39,17 +39,17 @@ Eigen::Matrix4d performGICP(const pcl::PointCloud<pcl::PointXYZI>::Ptr& source_c
     gicp.setInputSource(source_cloud);
     gicp.setInputTarget(target_cloud);
     
-    gicp.setMaxCorrespondenceDistance(4000);
-    gicp.setMaximumIterations(400);
-    gicp.setTransformationEpsilon(1e-6);
-    gicp.setEuclideanFitnessEpsilon(1e-6);
+    gicp.setMaxCorrespondenceDistance(2000);
+    gicp.setMaximumIterations(200);
+    gicp.setTransformationEpsilon(0.0001);
+    gicp.setEuclideanFitnessEpsilon(0.0001);
     gicp.setRANSACIterations(0);
 
     pcl::PointCloud<pcl::PointXYZI>::Ptr Final(new pcl::PointCloud<pcl::PointXYZI>());
     gicp.align(*Final);
     score = gicp.getFitnessScore();
 
-    if(gicp.hasConverged() && score < 1.8){
+    if(gicp.hasConverged() && score < 2.0){
         icp_success = true;
         Eigen::Matrix4d matrix = gicp.getFinalTransformation().cast<double>();
         return matrix;
@@ -70,15 +70,15 @@ Eigen::Matrix4d performNDT(const pcl::PointCloud<pcl::PointXYZI>::Ptr& source_cl
     
     // Parameters
     ndt.setResolution(5.0); // Adjust resolution for balance between speed and accuracy
-    ndt.setStepSize(0.5);    // Control the step size for each iteration
-    ndt.setTransformationEpsilon(1e-6);
+    ndt.setStepSize(0.2);    // Control the step size for each iteration
+    ndt.setTransformationEpsilon(1e-5);
     ndt.setMaximumIterations(200);
 
     pcl::PointCloud<pcl::PointXYZI>::Ptr Final(new pcl::PointCloud<pcl::PointXYZI>());
     ndt.align(*Final);
     score = ndt.getFitnessScore();
 
-    if(ndt.hasConverged() && score < 1.5){
+    if(ndt.hasConverged() && score < 2.0){
         icp_success = true;
         Eigen::Matrix4d matrix = ndt.getFinalTransformation().cast<double>();
         return matrix;
@@ -102,27 +102,64 @@ double estimate_initial_position(bool& icp_success, Eigen::Matrix4d& icp_transfo
 
     voxelize_pcd(aggregated_cloud);
     voxelize_map(mapcopy);
+
     double score = 100.0;
     bool icp_result= false;
 
 
-    if(changed)
+    int size = aggregated_cloud->points.size();
+
+    update_icp_trans.lock();
+    for(int i=0; i<size;i++)
     {
-        int size = aggregated_cloud->points.size();
-        for(int i=0; i<size;i++)
-        {
-            Transformation_points(&aggregated_cloud->points[i],&aggregated_cloud->points[i], icp_transformation_result);
-        }
+        Transformation_points(&aggregated_cloud->points[i],&aggregated_cloud->points[i], icp_transformation_result);
     }
+    update_icp_trans.unlock();
     
      
     sensor_msgs::PointCloud2 curr_msgs;
     pcl::toROSMsg(*aggregated_cloud, curr_msgs);
     curr_msgs.header.frame_id = map_frame;       
-    
+    pubinit_cloud.publish(curr_msgs);    
+
     
     icp_transformation = performGICP(aggregated_cloud, mapcopy, icp_result, score);
 
+    /*if(!icp_result && changed == false)
+    {   
+        Eigen::Matrix4d temp = Eigen::Matrix4d::Identity();
+        temp.block<3,3>(0,0)<< 0,-1,0,
+               1,0,0,
+               0,0,1;
+
+        update_icp_trans.lock(); 
+        Eigen::Matrix4d pure_rot = icp_transformation_result*temp*icp_transformation_result.inverse();
+        update_icp_trans.unlock(); 
+
+        for(int i=0; i<4;i++)
+        {
+
+            for(int i=0; i<size;i++)
+            {
+                Transformation_points(&aggregated_cloud->points[i],&aggregated_cloud->points[i], pure_rot);
+            }
+
+            sensor_msgs::PointCloud2 curr_msgs;
+            pcl::toROSMsg(*aggregated_cloud, curr_msgs);
+            curr_msgs.header.frame_id = map_frame;       
+            pubinit_cloud.publish(curr_msgs);   
+
+            icp_transformation = performGICP(aggregated_cloud, mapcopy, icp_result, score);
+            
+            if(icp_result){
+                update_icp_trans.lock(); 
+                icp_transformation_result = pure_rot * icp_transformation_result;
+                update_icp_trans.unlock();
+                break;
+            }
+        }                
+
+    }*/
 
     if (icp_result)
     {
@@ -136,10 +173,10 @@ double estimate_initial_position(bool& icp_success, Eigen::Matrix4d& icp_transfo
         }
         
         
-        if(changed)
-        {
-            icp_transformation = icp_transformation * icp_transformation_result;
-        }
+        update_icp_trans.lock();
+        icp_transformation = icp_transformation * icp_transformation_result;
+        changed =true;
+        update_icp_trans.unlock();
 
 
 
@@ -174,9 +211,9 @@ double estimate_initial_position(bool& icp_success, Eigen::Matrix4d& icp_transfo
     {
         ROS_WARN("ICP did not converge.");
         double score = 200.0;
+        changed = false;
     }
     
-    pubinit_cloud.publish(curr_msgs);    
     
     icp_success = icp_result;
 
@@ -206,7 +243,7 @@ pcl::PointCloud<pcl::PointXYZI>::Ptr make_cloud_submap(int index, int submap_siz
 void voxelize_pcd(const pcl::PointCloud<pcl::PointXYZI>::Ptr& cloud)
 {
     pcl::VoxelGrid<pcl::PointXYZI> voxel_pcd;
-    voxel_pcd.setLeafSize(0.4,0.4,0.4);
+    voxel_pcd.setLeafSize(scan_voxel_size,scan_voxel_size,scan_voxel_size);
     pcl::PointCloud<pcl::PointXYZI>::Ptr before_cloud(new pcl::PointCloud<pcl::PointXYZI>());
     *before_cloud = *cloud;
 
@@ -219,7 +256,7 @@ void voxelize_pcd(const pcl::PointCloud<pcl::PointXYZI>::Ptr& cloud)
 void voxelize_map(const pcl::PointCloud<pcl::PointXYZI>::Ptr& cloud)
 {
     pcl::VoxelGrid<pcl::PointXYZI> voxel_pcd;
-    voxel_pcd.setLeafSize(0.4,0.4,0.4);
+    voxel_pcd.setLeafSize(map_voxel_size, map_voxel_size, map_voxel_size);
     pcl::PointCloud<pcl::PointXYZI>::Ptr before_cloud(new pcl::PointCloud<pcl::PointXYZI>());
     *before_cloud = *cloud;
 
@@ -232,7 +269,7 @@ void voxelize_map(const pcl::PointCloud<pcl::PointXYZI>::Ptr& cloud)
 void voxelize_entire_map(const pcl::PointCloud<pcl::PointXYZI>::Ptr& cloud)
 {
     pcl::VoxelGrid<pcl::PointXYZI> voxel_pcd;
-    voxel_pcd.setLeafSize(1.0,1.0,1.0);
+    voxel_pcd.setLeafSize(10.0,10.0,10.0);
     pcl::PointCloud<pcl::PointXYZI>::Ptr before_cloud(new pcl::PointCloud<pcl::PointXYZI>());
     *before_cloud = *cloud;
 

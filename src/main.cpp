@@ -93,6 +93,7 @@ std::string map_frame = "map";
 
 int recent_index=0;
 std::mutex update_pose_mutex;
+std::mutex update_icp_trans;
 
 //for initial thread
 double min_score = 100.0;
@@ -102,18 +103,23 @@ Eigen::Matrix4d icp_transformation_result = Eigen::Matrix4d::Identity();
 Eigen::Matrix4d center_trans = Eigen::Matrix4d::Identity();
 
 
+//scan voxel_size
+double scan_voxel_size;
+double map_voxel_size;
+
 void publish_path(const ros::Publisher &pubodom, const ros::Publisher &pubpath)
 {
     //updating
-    if(changed)
+
+    update_pose_mutex.lock();
+    update_icp_trans.lock();
+    for(int i=0; i<frames.size();i++)
     {
-        update_pose_mutex.lock();
-        for(int i=0; i<frames.size();i++)
-        {
-            frames.at(i).changed_odoemtry = icp_transformation_result*frames.at(i).transformation_matrix;
-        }
-        update_pose_mutex.unlock();               
+        frames.at(i).changed_odoemtry = icp_transformation_result*frames.at(i).transformation_matrix;
     }
+    update_icp_trans.unlock();
+    update_pose_mutex.unlock();               
+
 
     nav_msgs::Odometry corrected_odom;
     nav_msgs::Path corrected_path;
@@ -184,7 +190,7 @@ void inital_thread()
     {
         rate.sleep();
 
-        if(frames.size()> cnt*50 && frames.size()!=0 ){
+        if(frames.size()> 80){
             std::cout << "start " << std::endl;
             bool success = false;
             Eigen::Matrix4d icp_transformation = Eigen::Matrix4d::Identity();
@@ -194,14 +200,46 @@ void inital_thread()
 
             if(success)
             {
+                update_icp_trans.lock();
                 changed = true;
                 icp_transformation_result = icp_transformation;
+                update_icp_trans.unlock();
             }
             cnt++;
 
         }
 
     }
+}
+
+void input_thread()
+{
+    ros::Rate rate(0.1);
+    while (ros::ok())
+    {
+        rate.sleep();
+
+        std::string input;
+        std::cout << "Enter x, y, z (or press enter to skip): ";
+        std::getline(std::cin, input);
+
+        if (!input.empty())  
+        {
+            float x, y, z;
+            std::stringstream ss(input);
+            ss >> x >> y >> z;
+            std::cout << "Received x: " << x << ", y: " << y << ", z: " << z << std::endl;
+
+            update_icp_trans.lock();
+            changed = true;
+            icp_transformation_result(0,3)= x;
+            icp_transformation_result(1,3)= y;
+            icp_transformation_result(2,3)= z;
+            update_icp_trans.unlock();
+
+        }
+    }
+    
 }
 
 
@@ -284,11 +322,15 @@ int main(int argc, char **argv)
 
     //parameters
     std::string pcd_file;
-    nh.param<std::string>("pcd_file", pcd_file, "/home/hyss/localization/snu_local/map.pcd");    
+    nh.param<std::string>("pcd_file", pcd_file, "/home/hyss/localization/snu_local/scnas.pcd");    
     nh.param<bool>("pcd_save/pcd_save_en", pcd_save_en, true);
     nh.param<int>("pcd_save/interval", pcd_save_interval, -1);
     //imu_lidar_extrinsic
     nh.param<vector<double>>("I_L_extrinsic", imu_lidar_matrix_vector, vector<double>());
+    //voxel size
+    nh.param<double>("scan_voxel_size",scan_voxel_size,0.2);
+    nh.param<double>("map_voxel_size", map_voxel_size, 0.2);
+
   
     //IL_extrinsic matrix to eigen matrix!
     if (imu_lidar_matrix_vector.size() == 16) 
@@ -331,17 +373,13 @@ int main(int argc, char **argv)
 
     center_trans << 1,0,0,center_x,
                     0,1,0,center_y,
-                    0,0,1,center_z,
+                    0,0,1,0,
                     0,0,0,1;
 
+    update_icp_trans.lock();
+    icp_transformation_result = center_trans;
+    update_icp_trans.unlock();
 
-    double x1, y1, z1;
-    double x2, y2, z2;
-    double x3, y3, z3;
-    double x4, y4, z4;
-
-    
-    voxelize_entire_map(map_cloud);
 
     //publishers
     pubinitodom = nh.advertise<nav_msgs::Odometry> ("Initial_odometry",100000);
@@ -374,6 +412,7 @@ int main(int argc, char **argv)
 
     std::thread pub_initial(inital_thread);
     std::thread pub_path{path_thread};
+    std::thread input(input_thread);
 
     ros::spin();
  
