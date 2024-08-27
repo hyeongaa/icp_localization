@@ -3,7 +3,7 @@
 #include <cstdlib> //for servers
 #include <thread>
 
-//ROS
+// ROS
 #include <ros/ros.h>
 #include <sensor_msgs/PointCloud.h>
 #include <sensor_msgs/CompressedImage.h>
@@ -18,12 +18,12 @@
 #include <tf2_ros/transform_broadcaster.h>
 #include <tf/transform_datatypes.h>
 #include <geometry_msgs/TransformStamped.h>
-#include <std_srvs/Trigger.h>  // for servers
+#include <std_srvs/Trigger.h> // for servers
 
-//PCL
-#include <pcl/point_types.h> //pt
-#include <pcl/point_cloud.h> //cloud
-#include <pcl/conversions.h> //ros<->pcl
+// PCL
+#include <pcl/point_types.h>                 //pt
+#include <pcl/point_cloud.h>                 //cloud
+#include <pcl/conversions.h>                 //ros<->pcl
 #include <pcl_conversions/pcl_conversions.h> //ros<->pcl
 #include <pcl/common/transforms.h>
 #include <pcl/filters/voxel_grid.h>
@@ -34,7 +34,7 @@
 #include <pcl_ros/point_cloud.h>
 #include <pcl/common/common.h>
 
-//Transformation, common
+// Transformation, common
 #include <Eigen/Core>
 #include <eigen3/Eigen/Dense>
 #include <deque>
@@ -42,93 +42,97 @@
 #include <vector>
 #include <math.h>
 
-//IMAGE
+// IMAGE
 #include <cv_bridge/cv_bridge.h>
 #include <opencv2/opencv.hpp>
 #include <opencv2/highgui/highgui.hpp>
 
-
 #include "transformation.hpp"
 #include "frame.hpp"
-#include "lidar.hpp"
-
+#include "localization.hpp"
+#include "icp.hpp"
 
 using namespace std;
 string root_dir = ROOT_DIR;
 
-//for saving all the pcd
-pcl::PointCloud<pcl::PointXYZI>::Ptr pcl_wait_save (new pcl::PointCloud<pcl::PointXYZI>());
-pcl::PointCloud<pcl::PointXYZI>::Ptr all_cloud (new pcl::PointCloud<pcl::PointXYZI>());
+// for saving all the pcd
+pcl::PointCloud<pcl::PointXYZI>::Ptr pcl_wait_save(new pcl::PointCloud<pcl::PointXYZI>());
+pcl::PointCloud<pcl::PointXYZI>::Ptr all_cloud(new pcl::PointCloud<pcl::PointXYZI>());
 pcl::PointCloud<pcl::PointXYZI>::Ptr map_cloud(new pcl::PointCloud<pcl::PointXYZI>);
 
 int pcd_save_interval = -1;
 bool pcd_save_en = true;
-int pcd_index =0;
+int pcd_index = 0;
 
-//rosservice
+// rosservice
 bool program_start = false;
 
 vector<double> imu_lidar_matrix_vector;
 
-//frames
-std::vector<frame_pose> frames; //1_frame={odom,pointcloud}
-
-
+// frames
+std::vector<frame_pose> frames; // 1_frame={odom,pointcloud}
 
 ros::Subscriber points_sub;
 
-//for initial estimation
+// for initial estimation
 ros::Publisher pubinitodom;
 ros::Publisher pubinit_cloud;
 ros::Publisher pubchange;
 ros::Publisher pubmap;
-ros::Publisher pubcenter_cloud;
+ros::Publisher pubcrop_cloud;
 
-//lio result
+// lio result
 ros::Publisher pubodom;
 ros::Publisher pubpath;
 
-std::string map_frame = "map"; 
+std::string map_frame = "map";
 
-
-int recent_index=0;
+int recent_index = 0;
 std::mutex update_pose_mutex;
 std::mutex update_icp_trans;
 
-//for initial thread
+// for initial thread
 double min_score = 100.0;
 int cnt = 1;
-bool changed = false;
+bool initialized = false;
 Eigen::Matrix4d icp_transformation_result = Eigen::Matrix4d::Identity();
 Eigen::Matrix4d center_trans = Eigen::Matrix4d::Identity();
 
-
-//scan voxel_size
+// scan voxel_size
 double scan_voxel_size;
 double map_voxel_size;
+double map_entire_voxel_size;
+
+//map management
+float map_x_size;
+float map_y_size;
+float map_z_size;
+
+Eigen::Vector4f min_pt, max_pt;
+std::vector<Eigen::Matrix4d> map_div_points;
+
 
 void publish_path(const ros::Publisher &pubodom, const ros::Publisher &pubpath)
 {
-    //updating
+    // updating
 
     update_pose_mutex.lock();
     update_icp_trans.lock();
-    for(int i=0; i<frames.size();i++)
+    for (int i = 0; i < frames.size(); i++)
     {
-        frames.at(i).changed_odoemtry = icp_transformation_result*frames.at(i).transformation_matrix;
+        frames.at(i).changed_odoemtry = icp_transformation_result * frames.at(i).transformation_matrix;
     }
     update_icp_trans.unlock();
-    update_pose_mutex.unlock();               
-
+    update_pose_mutex.unlock();
 
     nav_msgs::Odometry corrected_odom;
     nav_msgs::Path corrected_path;
 
     corrected_path.header.frame_id = map_frame;
     update_pose_mutex.lock();
-    for(int i=0; i<recent_index ; i++)
+    for (int i = 0; i < recent_index; i++)
     {
-        frame_pose &p  = frames[i];
+        frame_pose &p = frames[i];
 
         geometry_msgs::PoseStamped pose_stamped;
         pose_stamped.header.frame_id = map_frame;
@@ -144,12 +148,12 @@ void publish_path(const ros::Publisher &pubodom, const ros::Publisher &pubpath)
         pose_stamped.pose.orientation.x = quaternion.x();
         pose_stamped.pose.orientation.y = quaternion.y();
         pose_stamped.pose.orientation.z = quaternion.z();
-        pose_stamped.pose.orientation.w = quaternion.w();       
-        
-        //publish
+        pose_stamped.pose.orientation.w = quaternion.w();
+
+        // publish
         corrected_path.poses.push_back(pose_stamped);
 
-        if(i ==recent_index-1)
+        if (i == recent_index - 1)
         {
             corrected_odom.header.frame_id = map_frame;
             corrected_odom.header.stamp = ros::Time::now();
@@ -162,7 +166,6 @@ void publish_path(const ros::Publisher &pubodom, const ros::Publisher &pubpath)
             corrected_odom.pose.pose.orientation.y = quaternion.y();
             corrected_odom.pose.pose.orientation.z = quaternion.z();
             corrected_odom.pose.pose.orientation.w = quaternion.w();
-
         }
     }
 
@@ -174,41 +177,36 @@ void publish_path(const ros::Publisher &pubodom, const ros::Publisher &pubpath)
 void path_thread()
 {
     ros::Rate rate(10);
-    while(ros::ok())
+    while (ros::ok())
     {
         rate.sleep();
         publish_path(pubodom, pubpath);
     }
 }
 
-
-
 void inital_thread()
 {
     ros::Rate rate(10.0);
-    while(ros::ok())
+    while (ros::ok())
     {
         rate.sleep();
 
-        if(frames.size()> 80){
+        if (frames.size() > 50)
+        {
             std::cout << "start " << std::endl;
             bool success = false;
             Eigen::Matrix4d icp_transformation = Eigen::Matrix4d::Identity();
 
-            double score = estimate_initial_position(success,icp_transformation,cnt);
-            
+            double score = localization_scan(success, icp_transformation, cnt);
 
-            if(success)
+            if (success)
             {
                 update_icp_trans.lock();
-                changed = true;
                 icp_transformation_result = icp_transformation;
                 update_icp_trans.unlock();
             }
             cnt++;
-
         }
-
     }
 }
 
@@ -220,10 +218,17 @@ void input_thread()
         rate.sleep();
 
         std::string input;
-        std::cout << "Enter x, y, z (or press enter to skip): ";
+        std::cout << "Enter x, y, z (or press enter to skip, 'R' to reset): ";
         std::getline(std::cin, input);
 
-        if (!input.empty())  
+        if (input == "R")
+        {
+            update_icp_trans.lock();
+            initialized = false;
+            update_icp_trans.unlock();
+            std::cout << "Initialization reset (initialized = false)" << std::endl;
+        }
+        else if (!input.empty())
         {
             float x, y, z;
             std::stringstream ss(input);
@@ -231,22 +236,18 @@ void input_thread()
             std::cout << "Received x: " << x << ", y: " << y << ", z: " << z << std::endl;
 
             update_icp_trans.lock();
-            changed = true;
-            icp_transformation_result(0,3)= x;
-            icp_transformation_result(1,3)= y;
-            icp_transformation_result(2,3)= z;
+            initialized = true;
+            icp_transformation_result(0, 3) = x;
+            icp_transformation_result(1, 3) = y;
+            icp_transformation_result(2, 3) = z;
             update_icp_trans.unlock();
-
         }
     }
-    
 }
-
 
 void pcl_cbk(const sensor_msgs::PointCloud2::ConstPtr &msg)
 {
- 
-  
+
     pcl::PointCloud<pcl::PointXYZI>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZI>);
     pcl::fromROSMsg(*msg, *cloud);
     sensor_msgs::PointCloud2 temp_msgs;
@@ -262,14 +263,13 @@ void pcl_cbk(const sensor_msgs::PointCloud2::ConstPtr &msg)
     vg.setLeafSize(0.5f, 0.5f, 0.5f);
     vg.filter(*cloud_filtered);
 
-    //frame_pose current_frame(cloud_filtered);
-    //frames.push_back(current_frame);
-
+    // frame_pose current_frame(cloud_filtered);
+    // frames.push_back(current_frame);
 }
 
-void synchronizedCallback(const sensor_msgs::PointCloud2ConstPtr &pointcloud,const nav_msgs::Odometry::ConstPtr& odom)
+void synchronizedCallback(const sensor_msgs::PointCloud2ConstPtr &pointcloud, const nav_msgs::Odometry::ConstPtr &odom)
 {
-    // position 
+    // position
     double pos_x = odom->pose.pose.position.x;
     double pos_y = odom->pose.pose.position.y;
     double pos_z = odom->pose.pose.position.z;
@@ -284,34 +284,31 @@ void synchronizedCallback(const sensor_msgs::PointCloud2ConstPtr &pointcloud,con
     Eigen::Quaterniond q(ori_w, ori_x, ori_y, ori_z);
     Eigen::Matrix3d rotation_matrix = q.toRotationMatrix();
     Eigen::Matrix4d transformation_matrix = Eigen::Matrix4d::Identity();
-    transformation_matrix.block<3,3>(0,0) = rotation_matrix;
-    transformation_matrix(0,3) = pos_x;
-    transformation_matrix(1,3) = pos_y;
-    transformation_matrix(2,3) = pos_z;
-
-
+    transformation_matrix.block<3, 3>(0, 0) = rotation_matrix;
+    transformation_matrix(0, 3) = pos_x;
+    transformation_matrix(1, 3) = pos_y;
+    transformation_matrix(2, 3) = pos_z;
 
     try
     {
- 
+
         pcl::PointCloud<pcl::PointXYZI>::Ptr pcl_cloud(new pcl::PointCloud<pcl::PointXYZI>());
         pcl::fromROSMsg(*pointcloud, *pcl_cloud);
 
         frame_pose current_frame(transformation_matrix, pcl_cloud);
-        
-        frames.push_back(current_frame);      
+
+        frames.push_back(current_frame);
         recent_index++;
 
-        //ROS_DEBUG("Image timestamp: %f", image->header.stamp.toSec());
+        // ROS_DEBUG("Image timestamp: %f", image->header.stamp.toSec());
         ROS_DEBUG("PointCloud timestamp: %f", pointcloud->header.stamp.toSec());
         ROS_DEBUG("Odometry timestamp: %f", odom->header.stamp.toSec());
     }
-    catch (cv_bridge::Exception& e)
+    catch (cv_bridge::Exception &e)
     {
         ROS_ERROR("cv_bridge exception: %s", e.what());
         return;
     }
-    
 }
 
 int main(int argc, char **argv)
@@ -319,46 +316,50 @@ int main(int argc, char **argv)
     ros::init(argc, argv, "snu_localization");
     ros::NodeHandle nh;
 
-
-    //parameters
+    // parameters
     std::string pcd_file;
-    nh.param<std::string>("pcd_file", pcd_file, "/home/hyss/localization/snu_local/scnas.pcd");    
+    nh.param<std::string>("pcd_file", pcd_file, "/home/hyss/localization/snu_local/scnas.pcd");
     nh.param<bool>("pcd_save/pcd_save_en", pcd_save_en, true);
     nh.param<int>("pcd_save/interval", pcd_save_interval, -1);
-    //imu_lidar_extrinsic
+    // imu_lidar_extrinsic
     nh.param<vector<double>>("I_L_extrinsic", imu_lidar_matrix_vector, vector<double>());
-    //voxel size
-    nh.param<double>("scan_voxel_size",scan_voxel_size,0.2);
+    // voxel size
+    nh.param<double>("scan_voxel_size", scan_voxel_size, 0.2);
     nh.param<double>("map_voxel_size", map_voxel_size, 0.2);
+    nh.param<double>("map_entire_voxel_size",map_entire_voxel_size,0.4);
 
-  
-    //IL_extrinsic matrix to eigen matrix!
-    if (imu_lidar_matrix_vector.size() == 16) 
+    // IL_extrinsic matrix to eigen matrix!
+    if (imu_lidar_matrix_vector.size() == 16)
     {
         imu_lidar_matrix << imu_lidar_matrix_vector[0], imu_lidar_matrix_vector[1], imu_lidar_matrix_vector[2], imu_lidar_matrix_vector[3],
-                                imu_lidar_matrix_vector[4], imu_lidar_matrix_vector[5], imu_lidar_matrix_vector[6], imu_lidar_matrix_vector[7],
-                                imu_lidar_matrix_vector[8], imu_lidar_matrix_vector[9], imu_lidar_matrix_vector[10], imu_lidar_matrix_vector[11],
-                                imu_lidar_matrix_vector[12], imu_lidar_matrix_vector[13], imu_lidar_matrix_vector[14], imu_lidar_matrix_vector[15];
-    } else{
-            ROS_ERROR("Invalid size for IL_extrinsic matrix vector!");
-    }   
-    
-    std::cout<<CV_VERSION<<std::endl;
-/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+            imu_lidar_matrix_vector[4], imu_lidar_matrix_vector[5], imu_lidar_matrix_vector[6], imu_lidar_matrix_vector[7],
+            imu_lidar_matrix_vector[8], imu_lidar_matrix_vector[9], imu_lidar_matrix_vector[10], imu_lidar_matrix_vector[11],
+            imu_lidar_matrix_vector[12], imu_lidar_matrix_vector[13], imu_lidar_matrix_vector[14], imu_lidar_matrix_vector[15];
+    }
+    else
+    {
+        ROS_ERROR("Invalid size for IL_extrinsic matrix vector!");
+    }
 
+    std::cout << CV_VERSION << std::endl;
+    /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+    ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-    
     if (pcl::io::loadPCDFile<pcl::PointXYZI>(pcd_file, *map_cloud) == -1)
     {
         ROS_ERROR("Couldn't read file %s", pcd_file.c_str());
         return -1;
     }
-    // Calculate min/max for x, y, z
-    Eigen::Vector4f min_pt, max_pt;
-    pcl::getMinMax3D(*map_cloud, min_pt, max_pt);
+    pcl::PointCloud<pcl::PointXYZI>::Ptr map_vis(new pcl::PointCloud<pcl::PointXYZI>());
+    *map_vis = *map_cloud;
+    voxelize_entire_map(map_vis);
     
+
+    // Calculate min/max for x, y, z
+    //Eigen::Vector4f min_pt, max_pt;
+    pcl::getMinMax3D(*map_vis, min_pt, max_pt);
+
     std::cout << "Min X: " << min_pt[0] << ", Max X: " << max_pt[0] << std::endl;
     std::cout << "Min Y: " << min_pt[1] << ", Max Y: " << max_pt[1] << std::endl;
     std::cout << "Min Z: " << min_pt[2] << ", Max Z: " << max_pt[2] << std::endl;
@@ -368,69 +369,72 @@ int main(int argc, char **argv)
     double center_y = (min_pt[1] + max_pt[1]) / 2.0;
     double center_z = (min_pt[2] + max_pt[2]) / 2.0;
 
-    std::cout << "Map Center: (" << center_x << ", " << center_y <<","<<center_z<< ")" << std::endl;
+    std::cout << "Map Center: (" << center_x << ", " << center_y << "," << center_z << ")" << std::endl;
 
+    center_trans = make_eigen_matrix(center_x, center_y, 0);
+    map_div_points.push_back(Eigen::Matrix4d::Identity());
+    map_div_points.push_back(center_trans);
 
-    center_trans << 1,0,0,center_x,
-                    0,1,0,center_y,
-                    0,0,1,0,
-                    0,0,0,1;
-
-    update_icp_trans.lock();
+    /*update_icp_trans.lock();
     icp_transformation_result = center_trans;
-    update_icp_trans.unlock();
+    update_icp_trans.unlock();*/
 
+    //map size
+    map_x_size = max_pt[0]-min_pt[0];
+    map_y_size = max_pt[1]-min_pt[1];
+    map_z_size = max_pt[2]-min_pt[2];
+ 
 
-    //publishers
-    pubinitodom = nh.advertise<nav_msgs::Odometry> ("Initial_odometry",100000);
-    pubmap = nh.advertise<sensor_msgs::PointCloud2>("map",100000,true);
-    pubinit_cloud = nh.advertise<sensor_msgs::PointCloud2>("Initial_points",100000);
-    pubcenter_cloud = nh.advertise<sensor_msgs::PointCloud2>("Center_cloud",100000);
-    pubchange = nh.advertise<sensor_msgs::PointCloud2>("icp_changed_results",100000);
+    //divide map size
+    map_div_points.push_back(make_eigen_matrix(center_x+(map_x_size/8), center_y+(map_y_size/8),0));
+    map_div_points.push_back(make_eigen_matrix(center_x-(map_x_size/8), center_y+(map_y_size/8),0));
+    map_div_points.push_back(make_eigen_matrix(center_x-(map_x_size/8), center_y-(map_y_size/8),0));
+    map_div_points.push_back(make_eigen_matrix(center_x+(map_x_size/8), center_y-(map_y_size/8),0));
 
-    pubodom = nh.advertise<nav_msgs::Odometry> ("localized_odom",100000);
-    pubpath = nh.advertise<nav_msgs::Path>("localized_path",100000);
+    // publishers
+    pubinitodom = nh.advertise<nav_msgs::Odometry>("Initial_odometry", 100000);
+    pubmap = nh.advertise<sensor_msgs::PointCloud2>("map", 100000, true);
+    pubinit_cloud = nh.advertise<sensor_msgs::PointCloud2>("Initial_points", 100000);
+    pubcrop_cloud = nh.advertise<sensor_msgs::PointCloud2>("crop_cloud", 100000);
+    pubchange = nh.advertise<sensor_msgs::PointCloud2>("icp_changed_results", 100000);
 
+    pubodom = nh.advertise<nav_msgs::Odometry>("localized_odom", 100000);
+    pubpath = nh.advertise<nav_msgs::Path>("localized_path", 100000);
 
     sensor_msgs::PointCloud2 map_msg;
-    pcl::toROSMsg(*map_cloud, map_msg);
+    pcl::toROSMsg(*map_vis, map_msg);
     map_msg.header.frame_id = map_frame;
     pubmap.publish(map_msg);
 
-    //subscribers
-    //points_sub = nh.subscribe<sensor_msgs::PointCloud2>("/ouster/points",100000,pcl_cbk);
+    // subscribers
+    // points_sub = nh.subscribe<sensor_msgs::PointCloud2>("/ouster/points",100000,pcl_cbk);
     message_filters::Subscriber<sensor_msgs::PointCloud2> pointcloud_sub(nh, "/cloud_registered", 1);
-    message_filters::Subscriber<nav_msgs::Odometry> odometry_sub(nh,"/Odometry",1);
-    //sync callbacks....
+    message_filters::Subscriber<nav_msgs::Odometry> odometry_sub(nh, "/Odometry", 1);
+    // sync callbacks....
     typedef message_filters::sync_policies::ApproximateTime<sensor_msgs::PointCloud2, nav_msgs::Odometry> MySyncPolicy;
     message_filters::Synchronizer<MySyncPolicy> sync(MySyncPolicy(10), pointcloud_sub, odometry_sub);
     sync.registerCallback(boost::bind(&synchronizedCallback, _1, _2));
 
-
     // ROS 루프
-
 
     std::thread pub_initial(inital_thread);
     std::thread pub_path{path_thread};
     std::thread input(input_thread);
 
     ros::spin();
- 
 
-/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-    
-    //pcd save!
-    if (pcl_wait_save->size() > 0 && pcd_save_en)
+    /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+    // pcd save!
+    if (map_cloud->size() > 0 && pcd_save_en)
     {
         string file_name = string("scans.pcd");
         string all_points_dir(string(string(ROOT_DIR) + "PCD/") + file_name);
         pcl::PCDWriter pcd_writer;
-        ROS_INFO("Current scan is saved to /PCD/%s\n",file_name.c_str());
-        cout << "current scan is saved to /PCD/" << file_name<<endl;
-        pcd_writer.writeBinary(all_points_dir, *pcl_wait_save);
+        ROS_INFO("Current scan is saved to /PCD/%s\n", file_name.c_str());
+        cout << "current scan is saved to /PCD/" << file_name << endl;
+        pcd_writer.writeBinary(all_points_dir, *map_cloud);
     }
-
-    
 
     return 0;
 }
