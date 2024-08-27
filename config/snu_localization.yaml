@@ -6,8 +6,10 @@ I_L_extrinsic: [1.0, 0.0, 0.0, -0.011,
                 0.0, 0.0, 1.0, 0.04412,
                 0.0, 0.0, 0.0, 1.0]   
 
-scan_voxel_size: 0.3
-map_voxel_size: 0.3
+
+BEV_voxel_size: 0.5
+scan_voxel_size: 0.4
+map_voxel_size: 0.4
 map_entire_voxel_size: 0.2
 
 pcd_save:

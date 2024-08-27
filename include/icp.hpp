@@ -19,7 +19,8 @@ Eigen::Matrix4d initialize_icp(pcl::PointCloud<pcl::PointXYZI>::Ptr source_cloud
 Eigen::Matrix4d rotated_icp(pcl::PointCloud<pcl::PointXYZI>::Ptr source_cloud,
                             pcl::PointCloud<pcl::PointXYZI>::Ptr map_cloud,
                             bool& icp_result,
-                            Eigen::Matrix4d result_matrix);
+                            Eigen::Matrix4d result_matrix,
+                            int divide);
 
 
 extern float map_x_size;

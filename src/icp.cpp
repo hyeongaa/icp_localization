@@ -200,7 +200,8 @@ Eigen::Matrix4d initialize_icp(pcl::PointCloud<pcl::PointXYZI>::Ptr source_cloud
 Eigen::Matrix4d rotated_icp(pcl::PointCloud<pcl::PointXYZI>::Ptr source_cloud,
                             pcl::PointCloud<pcl::PointXYZI>::Ptr map_cloud,
                             bool& icp_result,
-                            Eigen::Matrix4d result_matrix)
+                            Eigen::Matrix4d result_matrix,
+                            int divide)
 {
     Eigen::Matrix4d result = Eigen::Matrix4d::Identity();
 
@@ -208,10 +209,10 @@ Eigen::Matrix4d rotated_icp(pcl::PointCloud<pcl::PointXYZI>::Ptr source_cloud,
     icp_result = false; 
     int size = source_cloud ->points.size();
 
-    for(int i=0; i<4;i++)
+    for(int i=0; i<divide;i++)
     {
         pcl::PointCloud<pcl::PointXYZI>::Ptr temp_cloud (new pcl::PointCloud<pcl::PointXYZI>(size,1));
-        Eigen::Matrix4d rot = make_rot_matrix(90*i);
+        Eigen::Matrix4d rot = make_rot_matrix(360/divide*i);
 
         for(int i=0; i<size;i++)
         {

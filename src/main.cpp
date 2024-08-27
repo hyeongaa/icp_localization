@@ -102,6 +102,7 @@ Eigen::Matrix4d center_trans = Eigen::Matrix4d::Identity();
 double scan_voxel_size;
 double map_voxel_size;
 double map_entire_voxel_size;
+double BEV_voxel_size;
 
 //map management
 float map_x_size;
@@ -111,6 +112,9 @@ float map_z_size;
 Eigen::Vector4f min_pt, max_pt;
 std::vector<Eigen::Matrix4d> map_div_points;
 
+//localization failed
+int failed_count =0;
+bool failed_bool = false;
 
 void publish_path(const ros::Publisher &pubodom, const ros::Publisher &pubpath)
 {
@@ -197,14 +201,14 @@ void inital_thread()
             bool success = false;
             Eigen::Matrix4d icp_transformation = Eigen::Matrix4d::Identity();
 
-            double score = localization_scan(success, icp_transformation, cnt);
+            double score = localization(success, icp_transformation, cnt);
 
-            if (success)
+            /*if (success)
             {
                 update_icp_trans.lock();
                 icp_transformation_result = icp_transformation;
                 update_icp_trans.unlock();
-            }
+            }*/
             cnt++;
         }
     }
@@ -227,8 +231,12 @@ void input_thread()
             initialized = false;
             update_icp_trans.unlock();
             std::cout << "Initialization reset (initialized = false)" << std::endl;
-        }
-        else if (!input.empty())
+        }else if(input == "F"){
+
+            failed_bool = true;
+            std::cout<<"Failed Rotation starts"<<std::endl;
+
+        }else if (!input.empty())
         {
             float x, y, z;
             std::stringstream ss(input);
@@ -327,7 +335,7 @@ int main(int argc, char **argv)
     nh.param<double>("scan_voxel_size", scan_voxel_size, 0.2);
     nh.param<double>("map_voxel_size", map_voxel_size, 0.2);
     nh.param<double>("map_entire_voxel_size",map_entire_voxel_size,0.4);
-
+    nh.param<double>("BEV_voxel_size", BEV_voxel_size, 0.5);
     // IL_extrinsic matrix to eigen matrix!
     if (imu_lidar_matrix_vector.size() == 16)
     {

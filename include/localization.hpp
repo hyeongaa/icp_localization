@@ -49,6 +49,7 @@
 #include "transformation.hpp"
 #include "icp.hpp"
 
+double localization(bool& icp_success, Eigen::Matrix4d& icp_transformation, int cnt);
 double localization_scan(bool& icp_success, Eigen::Matrix4d& icp_transformation, int cnt);
 double estimate_initial_position(bool& success, Eigen::Matrix4d& icp_transformation, int cnt);
 pcl::PointCloud<pcl::PointXYZ>::Ptr convertToBEV(pcl::PointCloud<pcl::PointXYZI>::Ptr cloud);
@@ -57,6 +58,7 @@ pcl::PointCloud<pcl::PointXYZI>::Ptr make_cloud_submap(int index, int submap_siz
 void voxelize_pcd(const pcl::PointCloud<pcl::PointXYZI>::Ptr& cloud);
 void voxelize_map(const pcl::PointCloud<pcl::PointXYZI>::Ptr& cloud);
 void voxelize_entire_map(const pcl::PointCloud<pcl::PointXYZI>::Ptr& cloud);
+void voxelize_multi_resolution(const pcl::PointCloud<pcl::PointXYZI>::Ptr& cloud, double size);
 
 
 
@@ -78,6 +80,10 @@ extern Eigen::Matrix4d center_trans;
 extern double scan_voxel_size;
 extern double map_voxel_size;
 extern double map_entire_voxel_size;
+extern double BEV_voxel_size;
 
 extern std::vector<Eigen::Matrix4d> map_div_points;
+extern int failed_count;
+extern bool failed_bool;
+
 #endif
