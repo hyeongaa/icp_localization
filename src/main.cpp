@@ -102,7 +102,7 @@ Eigen::Matrix4d center_trans = Eigen::Matrix4d::Identity();
 double scan_voxel_size;
 double map_voxel_size;
 double map_entire_voxel_size;
-double BEV_voxel_size;
+double NDT_voxel_size;
 
 //map management
 float map_x_size;
@@ -115,6 +115,8 @@ std::vector<Eigen::Matrix4d> map_div_points;
 //localization failed
 int failed_count =0;
 bool failed_bool = false;
+
+int result_cnt = 1; 
 
 void publish_path(const ros::Publisher &pubodom, const ros::Publisher &pubpath)
 {
@@ -195,7 +197,7 @@ void inital_thread()
     {
         rate.sleep();
 
-        if (frames.size() > 50)
+        if (frames.size() > 100)
         {
             std::cout << "start " << std::endl;
             bool success = false;
@@ -303,7 +305,14 @@ void synchronizedCallback(const sensor_msgs::PointCloud2ConstPtr &pointcloud, co
         pcl::PointCloud<pcl::PointXYZI>::Ptr pcl_cloud(new pcl::PointCloud<pcl::PointXYZI>());
         pcl::fromROSMsg(*pointcloud, *pcl_cloud);
 
-        frame_pose current_frame(transformation_matrix, pcl_cloud);
+        pcl::PointCloud<pcl::PointXYZI>::Ptr filtered_cloud(new pcl::PointCloud<pcl::PointXYZI>());
+        pcl::StatisticalOutlierRemoval<pcl::PointXYZI> sor;
+        sor.setInputCloud(pcl_cloud);
+        sor.setMeanK(150); // 각 포인트의 주변에서 k가의 이웃 포인트를 고려... k값을 늘리면 더 종교
+        sor.setStddevMulThresh(1.0); // 표준편차만큼 떨어져있는 것을 노이즈로 고려... 값이 작을 수록 크게 벗어난 포인트를 더 많이 제거.. 너무 낮추면 유용한 데이터도 소실
+        sor.filter(*filtered_cloud); //noise remove code
+
+        frame_pose current_frame(transformation_matrix, filtered_cloud);
 
         frames.push_back(current_frame);
         recent_index++;
@@ -335,7 +344,7 @@ int main(int argc, char **argv)
     nh.param<double>("scan_voxel_size", scan_voxel_size, 0.2);
     nh.param<double>("map_voxel_size", map_voxel_size, 0.2);
     nh.param<double>("map_entire_voxel_size",map_entire_voxel_size,0.4);
-    nh.param<double>("BEV_voxel_size", BEV_voxel_size, 0.5);
+    nh.param<double>("NDT_voxel_size", NDT_voxel_size, 0.5);
     // IL_extrinsic matrix to eigen matrix!
     if (imu_lidar_matrix_vector.size() == 16)
     {
@@ -377,7 +386,7 @@ int main(int argc, char **argv)
     double center_y = (min_pt[1] + max_pt[1]) / 2.0;
     double center_z = (min_pt[2] + max_pt[2]) / 2.0;
 
-    std::cout << "Map Center: (" << center_x << ", " << center_y << "," << center_z << ")" << std::endl;
+    //std::cout << "Map Center: (" << center_x << ", " << center_y << "," << center_z << ")" << std::endl;
 
     center_trans = make_eigen_matrix(center_x, center_y, 0);
     map_div_points.push_back(Eigen::Matrix4d::Identity());
@@ -394,10 +403,10 @@ int main(int argc, char **argv)
  
 
     //divide map size
-    map_div_points.push_back(make_eigen_matrix(center_x+(map_x_size/8), center_y+(map_y_size/8),0));
-    map_div_points.push_back(make_eigen_matrix(center_x-(map_x_size/8), center_y+(map_y_size/8),0));
-    map_div_points.push_back(make_eigen_matrix(center_x-(map_x_size/8), center_y-(map_y_size/8),0));
-    map_div_points.push_back(make_eigen_matrix(center_x+(map_x_size/8), center_y-(map_y_size/8),0));
+    map_div_points.push_back(make_eigen_matrix(center_x+(map_x_size/4), center_y+(map_y_size/4),0));
+    map_div_points.push_back(make_eigen_matrix(center_x-(map_x_size/4), center_y+(map_y_size/4),0));
+    map_div_points.push_back(make_eigen_matrix(center_x-(map_x_size/4), center_y-(map_y_size/4),0));
+    map_div_points.push_back(make_eigen_matrix(center_x+(map_x_size/4), center_y-(map_y_size/4),0));
 
     // publishers
     pubinitodom = nh.advertise<nav_msgs::Odometry>("Initial_odometry", 100000);
@@ -434,14 +443,14 @@ int main(int argc, char **argv)
     /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
     // pcd save!
-    if (map_cloud->size() > 0 && pcd_save_en)
+    if (map_vis->size() > 0 && pcd_save_en)
     {
         string file_name = string("scans.pcd");
         string all_points_dir(string(string(ROOT_DIR) + "PCD/") + file_name);
         pcl::PCDWriter pcd_writer;
         ROS_INFO("Current scan is saved to /PCD/%s\n", file_name.c_str());
         cout << "current scan is saved to /PCD/" << file_name << endl;
-        pcd_writer.writeBinary(all_points_dir, *map_cloud);
+        pcd_writer.writeBinary(all_points_dir, *map_vis);
     }
 
     return 0;

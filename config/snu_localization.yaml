@@ -1,4 +1,4 @@
-pcd_file: "/home/hyss/localization/snu_local/src/snu_localization/map/snu_1f_map.pcd"
+pcd_file: "/home/hyss/localization/snu_local/src/snu_localization/map/noise_removed/303_stairs_1f_2f_pgo_noise.pcd"
 
 
 I_L_extrinsic: [1.0, 0.0, 0.0, -0.011,
@@ -7,9 +7,9 @@ I_L_extrinsic: [1.0, 0.0, 0.0, -0.011,
                 0.0, 0.0, 0.0, 1.0]   
 
 
-BEV_voxel_size: 0.5
-scan_voxel_size: 0.4
-map_voxel_size: 0.4
+NDT_voxel_size: 0.5
+scan_voxel_size: 0.3
+map_voxel_size: 0.3
 map_entire_voxel_size: 0.2
 
 pcd_save:

@@ -18,8 +18,8 @@ double localization(bool& icp_success, Eigen::Matrix4d& icp_transformation, int 
         *BEV_scan_pcd = *aggregated_cloud;
         *BEV_map = *map_cloud;
 
-        voxelize_multi_resolution(BEV_scan_pcd, BEV_voxel_size);
-        voxelize_multi_resolution(BEV_map, BEV_voxel_size);
+        voxelize_multi_resolution(BEV_scan_pcd, NDT_voxel_size);
+        voxelize_multi_resolution(BEV_map, NDT_voxel_size);
 
         //map scan, rotate ...
         Eigen::Matrix4d temp = initialize_icp(BEV_scan_pcd, BEV_map, init_suc, map_div_points);
@@ -71,7 +71,7 @@ double localization(bool& icp_success, Eigen::Matrix4d& icp_transformation, int 
             update_icp_trans.unlock();
         }else{
             initialized = false;
-            BEV_voxel_size = 1.0;
+            NDT_voxel_size = 1.0;
         }
 
         failed_count=0;
@@ -103,7 +103,7 @@ double localization(bool& icp_success, Eigen::Matrix4d& icp_transformation, int 
     pubinit_cloud.publish(curr_msgs); 
 
 
-    icp_transformation = performGICP(scan, map, icp_result, score);
+    icp_transformation = performGICP_for_Test(scan, map, icp_result, score);
 
     if (icp_result)
     {
@@ -162,173 +162,6 @@ double localization(bool& icp_success, Eigen::Matrix4d& icp_transformation, int 
 
 }
 
-double localization_scan(bool& icp_success, Eigen::Matrix4d& icp_transformation, int cnt)
-{
-    pcl::PointCloud<pcl::PointXYZI>::Ptr aggregated_cloud = make_cloud_submap(0,cnt*500);
-    pcl::PointCloud<pcl::PointXYZI>::Ptr mapcopy(new pcl::PointCloud<pcl::PointXYZI>());
-
-    *mapcopy = *map_cloud;
-
-
-    double score = 100.0;
-    bool icp_result= false;
-
-    if(!initialized)
-    {
-        bool init_suc =false;
-        pcl::PointCloud<pcl::PointXYZI>::Ptr BEV_scan_pcd(new pcl::PointCloud<pcl::PointXYZI>());
-        pcl::PointCloud<pcl::PointXYZI>::Ptr BEV_map(new pcl::PointCloud<pcl::PointXYZI>());
-
-        *BEV_scan_pcd = *aggregated_cloud;
-        *BEV_map = *map_cloud;
-
-        voxelize_multi_resolution(BEV_scan_pcd, BEV_voxel_size);
-        voxelize_multi_resolution(BEV_map, BEV_voxel_size);
-
-        //map scan, rotate ...
-        Eigen::Matrix4d temp = initialize_icp(BEV_scan_pcd, BEV_map, init_suc, map_div_points);
-
-        if(init_suc)
-        {   
-            update_icp_trans.lock();
-            icp_transformation_result = temp;
-            update_icp_trans.unlock();
-            
-            Eigen::Matrix4d result = rotated_icp(BEV_scan_pcd, BEV_map, init_suc, temp,4);
-            
-            if(!init_suc) 
-            {
-                initialized = false;
-                return 200;
-            }    
-
-            update_icp_trans.lock();
-            icp_transformation_result = result;
-            update_icp_trans.unlock();
-
-        }else{
-            return 200;
-        }
-
-    }
-
-
-
-    if(failed_count ==5 || failed_bool)
-    {
-        voxelize_pcd(aggregated_cloud);
-        voxelize_map(mapcopy);
-        bool succ = false;
-        Eigen::Matrix4d failed_result = rotated_icp(aggregated_cloud, mapcopy, succ, icp_transformation_result,8);
-        if(succ)
-        {
-            update_icp_trans.lock();
-            icp_transformation_result = failed_result;
-            update_icp_trans.unlock();
-        }
-
-        failed_count=0;
-        failed_bool = false;
-        return 200;
-    }
-
-
-
-    int size = aggregated_cloud->points.size();
-    std::vector<double> multi_resol_sizes = {0.8, 0.4, 0.2};
-
-    for(int i=0; i< multi_resol_sizes.size();i++)
-    {
-        pcl::PointCloud<pcl::PointXYZI>::Ptr scan(new pcl::PointCloud<pcl::PointXYZI>());
-        pcl::PointCloud<pcl::PointXYZI>::Ptr map(new pcl::PointCloud<pcl::PointXYZI>());
-        *scan = *aggregated_cloud;
-        *map = *map_cloud;
-        voxelize_multi_resolution(scan, multi_resol_sizes.at(i));
-        voxelize_multi_resolution(map, multi_resol_sizes.at(i));
-
-        update_icp_trans.lock();
-        for(int i=0; i<size;i++)
-        {
-            Transformation_points(&scan->points[i],&scan->points[i], icp_transformation_result);
-        }
-        update_icp_trans.unlock();
-
-
-        sensor_msgs::PointCloud2 curr_msgs;
-        pcl::toROSMsg(*scan, curr_msgs);
-        curr_msgs.header.frame_id = map_frame;       
-        pubinit_cloud.publish(curr_msgs); 
-
-
-        icp_transformation = performGICP(scan, map, icp_result, score);
-    }
-
-    
-
-
-
-    if (icp_result)
-    {
-        
-        pcl::PointCloud<pcl::PointXYZI>::Ptr changed_Cloud(new pcl::PointCloud<pcl::PointXYZI>(size,1));
-        
-        update_icp_trans.lock();
-        icp_transformation = icp_transformation * icp_transformation_result;
-        update_icp_trans.unlock();
-
-        for(int i=0; i<size;i++)
-        {
-            Transformation_points(&aggregated_cloud->points[i], &changed_Cloud->points[i], icp_transformation);
-        }
-        
-        
- 
-
-
-
-        nav_msgs::Odometry odom;
-        odom.header.stamp = ros::Time::now();
-        odom.header.frame_id = map_frame;
-        odom.child_frame_id = "base_link";
-
-        odom.pose.pose.position.x = icp_transformation(0, 3);
-        odom.pose.pose.position.y = icp_transformation(1, 3);
-        odom.pose.pose.position.z = icp_transformation(2, 3);
-
-        Eigen::Matrix3d rotation = icp_transformation.block<3, 3>(0, 0);
-        Eigen::Quaterniond quaternion(rotation);
-        odom.pose.pose.orientation.x = quaternion.x();
-        odom.pose.pose.orientation.y = quaternion.y();
-        odom.pose.pose.orientation.z = quaternion.z();
-        odom.pose.pose.orientation.w = quaternion.w();
-
-
-        std::cout<<"ICP successed: Inital point: "<<odom.pose.pose.position.x<<" "<<odom.pose.pose.position.y<<" "<<odom.pose.pose.position.z<<" "<<std::endl;
-
-        sensor_msgs::PointCloud2 chan_msgs;
-        pcl::toROSMsg(*changed_Cloud, chan_msgs);
-        chan_msgs.header.frame_id = map_frame;
-
-        pubchange.publish(chan_msgs);
-        pubinitodom.publish(odom);
-        failed_count =0 ;
-
-    }
-    else
-    {
-        ROS_WARN("ICP did not converge.");
-        double score = 200.0;
-        failed_count++;
-    }
-    
-    
-    icp_success = icp_result;
-
-    return score;
-
-}
-
-
 
 double estimate_initial_position(bool& icp_success, Eigen::Matrix4d& icp_transformation, int cnt)
 {   
@@ -361,7 +194,20 @@ double estimate_initial_position(bool& icp_success, Eigen::Matrix4d& icp_transfo
     pubinit_cloud.publish(curr_msgs);    
 
     
-    icp_transformation = performGICP(aggregated_cloud, mapcopy, icp_result, score);
+    icp_transformation = performGICP_for_Test(aggregated_cloud, mapcopy, icp_result, score);
+
+    // Log the attempt number and score to a file
+    std::string file_path = "/home/hyss/localization/snu_local/icp_scores.txt";
+    std::ofstream outfile(file_path, std::ios_base::app);
+    if (!outfile)
+    {
+        std::cerr << "Error opening file for writing!" << std::endl;
+    }
+    else
+    {
+        outfile << cnt << " " << score << std::endl;
+        outfile.close();
+    }
 
     if (icp_result)
     {

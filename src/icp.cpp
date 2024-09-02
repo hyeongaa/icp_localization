@@ -59,6 +59,49 @@ Eigen::Matrix4d performGICP(const pcl::PointCloud<pcl::PointXYZI>::Ptr& source_c
     }
 }
 
+Eigen::Matrix4d performGICP_for_Test(const pcl::PointCloud<pcl::PointXYZI>::Ptr& source_cloud, const pcl::PointCloud<pcl::PointXYZI>::Ptr& target_cloud, bool& icp_success, double& score)
+{
+    pcl::GeneralizedIterativeClosestPoint<pcl::PointXYZI, pcl::PointXYZI> gicp;
+    gicp.setInputSource(source_cloud);
+    gicp.setInputTarget(target_cloud);
+    
+    gicp.setMaxCorrespondenceDistance(500);
+    gicp.setMaximumIterations(800);
+    gicp.setTransformationEpsilon(1e-6);
+    gicp.setEuclideanFitnessEpsilon(1e-6);
+    gicp.setRANSACIterations(0);
+
+    pcl::PointCloud<pcl::PointXYZI>::Ptr Final(new pcl::PointCloud<pcl::PointXYZI>());
+    gicp.align(*Final);
+    score = gicp.getFitnessScore();
+
+        // Log the attempt number and score to a file
+    std::string file_path = "/home/hyss/localization/snu_local/icp_scores.txt";
+    std::ofstream outfile(file_path, std::ios_base::app);
+    if (!outfile)
+    {
+        std::cerr << "Error opening file for writing!" << std::endl;
+    }
+    else
+    {
+        outfile << result_cnt << " " << score << std::endl;
+        outfile.close();
+        result_cnt++;
+    }
+
+
+    if(gicp.hasConverged() && score < 0.3){
+        icp_success = true;
+        Eigen::Matrix4d matrix = gicp.getFinalTransformation().cast<double>();
+        return matrix;
+    }else{
+        icp_success = false;
+        std::cout << "GICP did not converge, the score is " << score << std::endl;
+        Eigen::Matrix4d matrix_failed = Eigen::Matrix4d::Identity();
+        return matrix_failed;
+    }
+}
+
 Eigen::Matrix4d performNDT(const pcl::PointCloud<pcl::PointXYZI>::Ptr& source_cloud, const pcl::PointCloud<pcl::PointXYZI>::Ptr& target_cloud, bool& icp_success, double& score)
 {
     pcl::NormalDistributionsTransform<pcl::PointXYZI, pcl::PointXYZI> ndt;
@@ -66,7 +109,7 @@ Eigen::Matrix4d performNDT(const pcl::PointCloud<pcl::PointXYZI>::Ptr& source_cl
     ndt.setInputTarget(target_cloud);
     
     // Parameters
-    ndt.setResolution(2.0); // Adjust resolution for balance between speed and accuracy
+    ndt.setResolution(5.0); // Adjust resolution for balance between speed and accuracy
     ndt.setStepSize(0.2);    // Control the step size for each iteration
     ndt.setTransformationEpsilon(1e-6);
     ndt.setMaximumIterations(400);
@@ -96,7 +139,7 @@ Eigen::Matrix4d performBEVICP(const pcl::PointCloud<pcl::PointXYZ>::Ptr& source_
     icp.setInputSource(source_cloud);
     icp.setInputTarget(target_cloud);
     
-    icp.setMaxCorrespondenceDistance(500); // 조정 가능
+    icp.setMaxCorrespondenceDistance(500);
     icp.setMaximumIterations(500);
     icp.setTransformationEpsilon(1e-10);
     icp.setEuclideanFitnessEpsilon(1e-10);
@@ -106,7 +149,7 @@ Eigen::Matrix4d performBEVICP(const pcl::PointCloud<pcl::PointXYZ>::Ptr& source_
     icp.align(*Final);
     score = icp.getFitnessScore();
 
-    if (icp.hasConverged() && score < 1.0) { // 필요시 조정
+    if (icp.hasConverged() && score < 0.8) { 
         icp_success = true;
         Eigen::Matrix4f matrix = icp.getFinalTransformation();
         return matrix.cast<double>();
@@ -152,12 +195,9 @@ Eigen::Matrix4d initialize_icp(pcl::PointCloud<pcl::PointXYZI>::Ptr source_cloud
 
             bool icp_success = false;
             double score = 200.0;
+ 
 
-            pcl::PointCloud<pcl::PointXYZ>::Ptr bev_scan = convertToBEV(temp_cloud);
-            pcl::PointCloud<pcl::PointXYZ>::Ptr bev_map = convertToBEV(map_cloud);
-
-
-            Eigen::Matrix4d current_result = performBEVICP(bev_scan, bev_map, icp_success, score);
+            Eigen::Matrix4d current_result = performNDT(temp_cloud, map_cloud, icp_success, score);
 
             if(icp_success && score < best_icp_score)
             {
@@ -230,7 +270,7 @@ Eigen::Matrix4d rotated_icp(pcl::PointCloud<pcl::PointXYZI>::Ptr source_cloud,
         //pcl::PointCloud<pcl::PointXYZ>::Ptr bev_map = convertToBEV(map_cloud);
 
 
-        Eigen::Matrix4d current_result = performGICP(temp_cloud, map_cloud, icp_success, score); 
+        Eigen::Matrix4d current_result = performGICP_for_Test(temp_cloud, map_cloud, icp_success, score); 
         
         if(icp_success && score < best_icp_score)
         {

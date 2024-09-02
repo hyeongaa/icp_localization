@@ -1,6 +1,7 @@
 #ifndef LOCALIZATION_HPP
 #define LOCALIZATION_HPP
 
+#include <fstream>  // Include this for file operations
 
 #include <iostream>
 #include <string>
@@ -50,7 +51,6 @@
 #include "icp.hpp"
 
 double localization(bool& icp_success, Eigen::Matrix4d& icp_transformation, int cnt);
-double localization_scan(bool& icp_success, Eigen::Matrix4d& icp_transformation, int cnt);
 double estimate_initial_position(bool& success, Eigen::Matrix4d& icp_transformation, int cnt);
 pcl::PointCloud<pcl::PointXYZ>::Ptr convertToBEV(pcl::PointCloud<pcl::PointXYZI>::Ptr cloud);
 
@@ -80,7 +80,7 @@ extern Eigen::Matrix4d center_trans;
 extern double scan_voxel_size;
 extern double map_voxel_size;
 extern double map_entire_voxel_size;
-extern double BEV_voxel_size;
+extern double NDT_voxel_size;
 
 extern std::vector<Eigen::Matrix4d> map_div_points;
 extern int failed_count;
